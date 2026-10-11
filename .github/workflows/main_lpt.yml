@@ -7,10 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  # Enter the exact existing Azure Web App name.
   AZURE_WEBAPP_NAME: 'LPT'
-
-  # Use '.' if website files are in the repository root.
   WEBSITE_SOURCE: '.'
 
 jobs:
@@ -25,6 +22,29 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Check Azure secrets
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $required = @(
+            "AZURE_CLIENT_ID",
+            "AZURE_TENANT_ID",
+            "AZURE_SUBSCRIPTION_ID"
+          )
+
+          foreach ($name in $required) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              throw "Missing repository secret: $name"
+            }
+          }
+
+          Write-Host "All required Azure secrets are present."
 
       - name: Prepare website files
         shell: pwsh
@@ -66,9 +86,9 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_57DFE9A7BB66493D9D2C1F7891024887 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_05437097057E4D1E9CCDD2770DB300AB }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_2EF40C985B6646D6A3624D56534B0BF4 }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
