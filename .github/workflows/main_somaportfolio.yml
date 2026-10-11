@@ -1,4 +1,4 @@
-name: Deploy portfolio to Azure Web App - LPT
+name: Deploy website to Azure Web App - LPT
 
 on:
   push:
@@ -6,51 +6,69 @@ on:
       - main
   workflow_dispatch:
 
+env:
+  AZURE_WEBAPP_NAME: 'LPT'
+
+  # Folder containing your ready-to-deploy website.
+  # Use '.' when website files are in the repository root.
+  WEBSITE_SOURCE: '.'
+
 jobs:
   build:
-    name: Prepare portfolio files
+    name: Package website
     runs-on: windows-latest
+
     permissions:
       contents: read
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Validate and prepare website
+      - name: Prepare website files
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          $source = Join-Path $env:GITHUB_WORKSPACE $env:WEBSITE_SOURCE
+          $destination = Join-Path $env:RUNNER_TEMP "website"
 
-          $required = @(
-            "index.html",
-            "web.config",
-            "favicon.svg",
-            "assets"
-          )
-
-          foreach ($item in $required) {
-            if (!(Test-Path $item)) {
-              throw "Missing $item at repository root. Upload the extracted AppService_Ready files."
-            }
+          if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+            throw "Website source folder does not exist: $source"
           }
 
-          New-Item -ItemType Directory -Path published -Force | Out-Null
+          New-Item -ItemType Directory -Path $destination -Force | Out-Null
 
-          Copy-Item index.html, web.config, favicon.svg -Destination published
-          Copy-Item assets -Destination published -Recurse
+          Get-ChildItem -LiteralPath $source -Force |
+            Where-Object {
+              $_.Name -notin @(".git", ".github")
+            } |
+            ForEach-Object {
+              Copy-Item -LiteralPath $_.FullName `
+                -Destination $destination `
+                -Recurse -Force
+            }
 
-      - name: Upload artifact for deployment
+          $files = @(
+            Get-ChildItem -LiteralPath $destination -Recurse -File
+          )
+
+          if ($files.Count -eq 0) {
+            throw "No website files found."
+          }
+
+          Write-Host "Packaged $($files.Count) website files."
+
+      - name: Upload website artifact
         uses: actions/upload-artifact@v4
         with:
           name: ASP-app
-          path: published/
+          path: ${{ runner.temp }}/website/
           if-no-files-found: error
 
   deploy:
     name: Deploy to Azure
     runs-on: windows-latest
     needs: build
+
     permissions:
       id-token: write
       contents: read
@@ -65,14 +83,28 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_6C8117172E5840E8A45D24481C63EEA0 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E763BB48DDB3406282D42AA7315DC5D3 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_906823FE00CE4281B470A03E9BADFD87 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_57DFE9A7BB66493D9D2C1F7891024887 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_05437097057E4D1E9CCDD2770DB300AB }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_2EF40C985B6646D6A3624D56534B0BF4 }}
 
-      - name: Deploy to Azure Web App
+      - name: Verify target Web App
+        shell: pwsh
+        run: |
+          $appId = az webapp show `
+            --name $env:AZURE_WEBAPP_NAME `
+            --query id `
+            --output tsv
+
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appId)) {
+            throw "Web App '$env:AZURE_WEBAPP_NAME' was not found or is inaccessible. Check the app name, subscription secret, and deployment identity permissions."
+          }
+
+          Write-Host "Target Web App: $appId"
+
+      - name: Deploy website
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
-          app-name: somaportfolio
-          slot-name: Production
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: 'Production'
           package: website
