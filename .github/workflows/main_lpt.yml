@@ -1,54 +1,117 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-
-name: Build and deploy ASP app to Azure Web App - LPT
+name: Build and deploy ASP.NET app to Azure Web App - LPT
 
 on:
   push:
     branches:
-      - 'main'
+      - main
   workflow_dispatch:
+
+env:
+  # Leave empty if the repository has only one .csproj.
+  # Otherwise enter the web project path, e.g. src/LPT/LPT.csproj
+  WEB_PROJECT: ''
 
 jobs:
   build:
     runs-on: windows-latest
+
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read
+
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
-      - name: Setup MSBuild path
-        uses: microsoft/setup-msbuild@v1.0.2
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
 
-      - name: Setup NuGet
-        uses: NuGet/setup-nuget@v1.0.5
+      - name: Find application project
+        id: project
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:WEB_PROJECT)) {
+            $project = Join-Path $env:GITHUB_WORKSPACE $env:WEB_PROJECT
 
-      - name: Restore NuGet packages
-        run: nuget restore
+            if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
+              throw "WEB_PROJECT does not exist: $project"
+            }
+          }
+          else {
+            $projects = @(
+              Get-ChildItem -Path $env:GITHUB_WORKSPACE `
+                -Recurse -File -Filter *.csproj |
+              Where-Object {
+                $_.FullName -notmatch '[\\/](bin|obj)[\\/]'
+              }
+            )
 
-      - name: Publish to folder
-        run: msbuild /nologo /verbosity:m /t:Build /t:pipelinePreDeployCopyAllFilesToOneFolder /p:_PackageTempDir="\published\"
+            if ($projects.Count -eq 0) {
+              throw "No .csproj found. Upload the application source project, or use a workflow appropriate for a website without a project file."
+            }
 
-      - name: Upload artifact for deployment job
+            if ($projects.Count -gt 1) {
+              $projects | ForEach-Object {
+                Write-Host $_.FullName
+              }
+              throw "Multiple projects found. Set WEB_PROJECT to the web application's .csproj path."
+            }
+
+            $project = $projects[0].FullName
+          }
+
+          Write-Host "Building project: $project"
+          "path=$project" >> $env:GITHUB_OUTPUT
+
+      - name: Restore, build and publish
+        env:
+          PROJECT_PATH: ${{ steps.project.outputs.path }}
+        run: |
+          $publishPath = Join-Path $env:GITHUB_WORKSPACE "published"
+
+          & msbuild $env:PROJECT_PATH `
+            /nologo `
+            /verbosity:minimal `
+            /restore `
+            /p:RestorePackagesConfig=true `
+            /p:Configuration=Release `
+            /p:DeployOnBuild=true `
+            /p:DeployDefaultTarget=WebPublish `
+            /p:WebPublishMethod=FileSystem `
+            "/p:PublishUrl=$publishPath"
+
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          if (-not (Test-Path "$publishPath\web.config")) {
+            throw "Published web.config was not found. Verify that WEB_PROJECT points to an ASP.NET Framework web application."
+          }
+
+      - name: Upload published application
         uses: actions/upload-artifact@v4
         with:
           name: ASP-app
-          path: '/published/**'
+          path: ${{ github.workspace }}/published/
+          if-no-files-found: error
 
   deploy:
     runs-on: windows-latest
     needs: build
+
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
+      id-token: write
+      contents: read
 
     steps:
-      - name: Download artifact from build job
+      - name: Download published application
         uses: actions/download-artifact@v4
         with:
           name: ASP-app
-      
+          path: published
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -57,10 +120,8 @@ jobs:
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_2EF40C985B6646D6A3624D56534B0BF4 }}
 
       - name: Deploy to Azure Web App
-        id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
-          app-name: 'LPT'
-          slot-name: 'Production'
-          package: .
-          
+          app-name: LPT
+          slot-name: Production
+          package: published
