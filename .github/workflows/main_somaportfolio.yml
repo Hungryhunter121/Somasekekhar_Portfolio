@@ -1,4 +1,4 @@
-name: Deploy portfolio to Azure Web App - somaportfolio
+name: Deploy portfolio to Azure Web App - LPT
 
 on:
   push:
